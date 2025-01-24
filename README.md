@@ -1,7 +1,6 @@
-# StreamBench 
-Coming soon, stay tuned.
-
-Official repo for paper "[Streaming Video Understanding and Multi-round Interaction with Memory-enhanced Knowledge]" ICLR2025🎉
+# StreamChat 
+Official repo for "[Streaming Video Understanding and Multi-round Interaction with Memory-enhanced Knowledge]" ICLR2025🎉
+Coming soon, stay tuned
 
 ## 🔥 News
 **[2025.11]** 🔥 Release repo and test code.
