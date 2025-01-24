@@ -1,0 +1,7 @@
+langchain==0.0.146
+sentence-transformers==2.2.2
+llama-index==0.5.23.post1
+faiss-cpu
+openai==0.27.6
+torchaudio
+unstructured
