@@ -51,8 +51,8 @@ def extract_frames(video_path, output_folder, fps):
     print(f"Extracted {extracted_frames} frames at {fps} FPS and saved to {output_folder}")
 
 # 示例用法
-video_path = '/13390024681/llama/EfficientVideo/Ours/videos/ego_streaming/ego_1.mp4'
-output_folder = '/13390024681/llama/EfficientVideo/Ours/save_images'
+video_path = ''
+output_folder = ''
 fps = 1  # 提取每秒1帧
 
 extract_frames(video_path, output_folder, fps)

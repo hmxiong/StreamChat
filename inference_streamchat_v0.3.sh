@@ -1,18 +1,12 @@
 #!/usr/bin/env bash
-source ~/anaconda3/etc/profile.d/conda.sh
-conda activate freeva
-cd /13390024681/llama/EfficientVideo/Ours
-# 218
-yes | pip install json_lines
+OURS_EGO= # chang to your json output save path
+LLAMA_3= # chang to your LLaMA3 path
+SAVE_DIR= # chang to your LLaMA3 score output path
 
-OURS_EGO=/13390024681/llama/EfficientVideo/Ours/output/result_test_streaming_fast_v0.3_0.2rate_chunk_size_40.json
-LLAMA_3=/13390024681/All_Model_Zoo/llama3-8b-instruct-hf
-SAVE_DIR=/13390024681/llama/EfficientVideo/All_Score
-
-CUDA_VISIBLE_DEVICES=0,1 python inference_streaming_longva_offline.py \
-                    --model_name /13390024681/All_Model_Zoo/LongVA-7B-DPO \
-                    --video_dir /13390024681/All_Data/Streaming_Bench_v0.3 \
-                    --annotations /13390024681/llama/EfficientVideo/Ours/streaming_bench_v0.3.json \
+CUDA_VISIBLE_DEVICES=0,1 python inference_streaming_longva_v2.py \
+                    --model_name Your_LongVA_model_path \
+                    --video_dir Your_StreamBench_path \
+                    --annotations Your_StreamBench_streaming_bench_v0.3.json \
                     --conv-mode qwen_1_5  \
                     --temperature 0.2  \
                     --sample_rate 0.2 \
@@ -25,7 +19,7 @@ CUDA_VISIBLE_DEVICES=0,1 python inference_streaming_longva_offline.py \
                     --compress_rate 1 \
                     --num_beams 1 \
                     --mode on_line \
-                    --memory_basic_dir /13390024681/llama/EfficientVideo/Ours/memory_bank/memories/streamingbench_chunk_size_40 \
+                    --memory_basic_dir Your_history_conversation_save_path \
                     --memory_file updata_memories_for_test_streaming_fast_v0.3_0.2rate_chunk_size_40.json \
                     --save_file ${OURS_EGO} \
                     --memory_search_top_k 1 \
@@ -42,7 +36,7 @@ mkdir ${SAVE_DIR}/StreamingBench_v0.3
 ################### Ours ###################
 mkdir ${SAVE_DIR}/StreamingBench_v0.3/Ours_rate0.2_chunk40
 for IDX in $(seq 0 $((CHUNKS-1))); do
-  CUDA_VISIBLE_DEVICES=${GPULIST[$IDX]} python3 /13390024681/llama/EfficientVideo/Ours/eval_video_qa_with_llama3_ours.py \
+  CUDA_VISIBLE_DEVICES=${GPULIST[$IDX]} python3 eval_video_qa_with_llama3_ours.py \
     --predict_file ${OURS_EGO} \
     --output_dir ${SAVE_DIR}/StreamingBench_v0.3/Ours_rate0.2_chunk40 \
     --output_name ${CHUNKS}_${IDX} \
@@ -63,6 +57,6 @@ for IDX in $(seq 0 $((CHUNKS-1))); do
     cat ${SAVE_DIR}/StreamingBench_v0.3/Ours_rate0.2_chunk40/${CHUNKS}_${IDX}.json >> "$output_file"
 done
 
-python /13390024681/llama/EfficientVideo/Ours/calculate_score.py \
+python calculate_score.py \
     --output_dir ${SAVE_DIR}/StreamingBench_v0.3/Ours_rate0.2_chunk40 \
     --output_name streamingbench_merge

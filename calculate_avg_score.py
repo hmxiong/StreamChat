@@ -1,17 +1,15 @@
 import json
 from collections import defaultdict
 
-# 假设你的 JSONL 文件名为 data.jsonl
-jsonl_file_path = '/13390024681/llama/EfficientVideo/All_Score/GPT_4o/streamingbench_merge.jsonl'
+jsonl_file_path = '' # the path of your results
 
-# 初始化统计变量
 class_scores = defaultdict(int)
 class_counts = defaultdict(int)
-class_acc_counts = defaultdict(int)  # 用于统计每个类别的样本数
+class_acc_counts = defaultdict(int) 
 
-score_differences = []  # 用于存储相邻数据的 score 差值
+score_differences = []  
 process_time = []
-previous_score = None  # 保存前一个数据的 score
+previous_score = None
 
 # 读取 JSONL 文件并统计每个 class 的 score 和 acc
 with open(jsonl_file_path, 'r') as file:

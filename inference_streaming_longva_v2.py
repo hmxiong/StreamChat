@@ -10,12 +10,12 @@ from tqdm import tqdm
 from llava.eval.model_utils import load_video
 from decord import VideoReader, cpu
 
-from vila.constants import IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN
-from vila.conversation import conv_templates, SeparatorStyle
-from vila.model.builder import load_pretrained_model
+from longva.constants import IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN
+from longva.conversation import conv_templates, SeparatorStyle
+from longva.model.builder import load_pretrained_model
 # from llavanext.model.builder import load_pretrained_model  as load_llava_next 
-from vila.utils import disable_torch_init
-from vila.mm_utils import tokenizer_image_token, process_images, get_model_name_from_path
+from longva.utils import disable_torch_init
+from longva.mm_utils import tokenizer_image_token, process_images, get_model_name_from_path
 from utiles import compute_gradients, Optical_flow, SSIM, long_short_memory_update, \
                     long_short_memory_update_with_summarize, search_tree, search_tree_multi_modal, \
                     fast_search_tree_multi_modal_with_embedding, MultimodalTreeNode, TreeNode, build_prompt_with_search_memory_only_related, \
@@ -74,7 +74,7 @@ def parse_args():
     parser.add_argument("--temperature", type=float, default=0.2)
     parser.add_argument("--sample_rate", type=float, default=0.5)
     parser.add_argument("--top_p", type=float, default=None)
-    parser.add_argument("--memory_basic_dir", type=str, required=True, default='/13390024681/llama/EfficientVideo/Ours/memory_bank/memories')
+    parser.add_argument("--memory_basic_dir", type=str, required=True, default='/Ours/memory_bank/memories')
     parser.add_argument("--memory_file", type=str, required=False, default='updata_memories_for_streaming.json')
     parser.add_argument("--save_file", type=str, required=True, default='result_for_streaming.json')
     parser.add_argument("--annotations", type=str, required=True, default='result_for_streaming.json')
@@ -85,6 +85,81 @@ def parse_args():
     
 
     return parser.parse_args()
+
+def longva_inference_with_embedding(question, num_frames, conv_mode, model, tokenizer, chat, short_memory_buffer_cache, long_memory_tree_cache, history_prompt=None):
+    
+    global feature_bank
+    
+    if history_prompt is not None:
+        if model.config.mm_use_im_start_end:
+            qs = history_prompt + DEFAULT_IM_START_TOKEN + DEFAULT_IMAGE_TOKEN + DEFAULT_IM_END_TOKEN + '\n' + question
+        else:
+            qs = history_prompt + DEFAULT_IMAGE_TOKEN + '\n' + question
+    else:
+        if model.config.mm_use_im_start_end:
+            qs = DEFAULT_IM_START_TOKEN + DEFAULT_IMAGE_TOKEN + DEFAULT_IM_END_TOKEN + '\n' + question
+        else:
+            qs = DEFAULT_IMAGE_TOKEN + '\n' + question
+
+    # print("Question:{}".format(qs))
+    
+    conv = conv_templates[conv_mode].copy()
+    conv.append_message(conv.roles[0], qs)
+    conv.append_message(conv.roles[1], None)
+    prompt = conv.get_prompt()
+    print("Prompt:{}".format(prompt))
+    input_ids = tokenizer_image_token(prompt, tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt')
+    input_ids = input_ids.unsqueeze(0).cuda()
+    # ques_ids = ques_ids.unsqueeze(0).cuda()
+    # print("input",input_ids)
+    # print("ques",ques_ids)
+    # print("image size 1 :{}".format(image_sizes))
+    short_memory_embedding = torch.cat(short_memory_buffer_cache).view(-1, short_memory_buffer_cache[0].shape[-1]) # [4x576, 4096]
+    print("short_memory_embedding", short_memory_embedding.shape)
+    time_0 = time.time()
+    # with threading.Lock():
+    question_ids = tokenizer(question).input_ids
+    question_embeddings  = model.get_model().embed_tokens(torch.tensor(question_ids, dtype=torch.long, device='cuda')) # num_text_token 4096
+    if long_memory_tree_cache is not None:
+        long_memory_list = search_tree(long_memory_tree_cache, torch.cat([question_embeddings, short_memory_embedding], dim=0))
+        print("long memory list:{}".format(len(long_memory_list)))
+        long_memory_embeddings = torch.cat(long_memory_list, dim=0).view(-1, long_memory_list[0].shape[-1]) # [40x36, 4096]
+        print("long_memory_embeddings", long_memory_embeddings.shape)
+        
+        image_embeddings = torch.cat([short_memory_embedding, long_memory_embeddings], dim=0)
+        # visualize_memory_feature_with_PCA(feature_bank, long_memory_list, clustering=5, same_color=False, only_most_important=False)
+        
+    else:
+        image_embeddings = short_memory_embedding
+    
+    
+    time_1 = time.time()
+    
+    with torch.inference_mode():
+        output_ids = model.generate_with_image_embedding(
+            input_ids,
+            image_embeddings=[image_embeddings],
+            modalities=["video"],
+            # question_ids=ques_ids,
+            # modalities="image",
+            do_sample=True if args.temperature > 0 else False,
+            temperature=args.temperature,
+            top_p=args.top_p,
+            num_beams=args.num_beams,
+            max_new_tokens=512,
+            use_cache=False)
+
+    outputs = tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0].strip()
+    time_2 = time.time()
+    # Perform inference and play the generated audio
+    # wavs = chat.infer([outputs])
+    # Audio(wavs[0], rate=24_000, autoplay=True)
+    # Save the generated audio 
+    # torchaudio.save("output.wav", torch.from_numpy(wavs[0]), 24000)
+    
+    print("process time:{}, generate time:{}".format((time_1 - time_0), (time_2 - time_1)))
+    
+    return outputs, (time_1 - time_0), (time_2 - time_1)
 
 def longva_inference_with_embedding_multi_modal(question, num_frames, conv_mode, model, embedding_model, tokenizer, embedding_tokenizer, chat, short_memory_buffer_cache, long_memory_tree_cache, history_prompt=None):
     
@@ -98,8 +173,8 @@ def longva_inference_with_embedding_multi_modal(question, num_frames, conv_mode,
     short_memory_embedding = torch.cat(short_memory_buffer_cache).view(-1, short_memory_buffer_cache[0].shape[-1]) # [4x576, 4096]
     time_0 = time.time()
     # with threading.Lock():
-    # question_ids = tokenizer(question).input_ids
-    # question_embeddings  = model.get_model().embed_tokens(torch.tensor(question_ids, dtype=torch.long, device='cuda')) # num_text_token 4096
+    question_ids = tokenizer(question).input_ids
+    question_embeddings  = model.get_model().embed_tokens(torch.tensor(question_ids, dtype=torch.long, device='cuda')) # num_text_token 4096
     if long_memory_tree_cache is not None:
         long_memory_list, long_memory_text_list = fast_search_tree_multi_modal_with_embedding(long_memory_tree_cache, 
                                                                                               question, 
@@ -166,13 +241,6 @@ def longva_inference_with_embedding_multi_modal(question, num_frames, conv_mode,
     end_time = time.time()
     # delay_time = end_time - start_time
     delay_time = time_1 - time_0
-    # print("delay time:{}".format(end_time - start_time))
-    # all_delay.append((end_time - start_time))
-    # print("image embedding shape:{}".format(image_embeddings.shape))
-    # topk_images = [frame_list[idx] for idx in topk_indices]
-    # for index, image in enumerate(topk_images):
-    #     img = Image.fromarray(image)
-    #     img.save("/13390024681/llama/EfficientVideo/Ours/save_images/topk_{}.jpg".format(topk_values[index]))
     
     with torch.inference_mode():
         output_ids = model.generate_with_image_embedding(
@@ -190,13 +258,6 @@ def longva_inference_with_embedding_multi_modal(question, num_frames, conv_mode,
 
     outputs = tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0].strip()
     time_2 = time.time()
-    # Perform inference and play the generated audio
-    # wavs = chat.infer([outputs])
-    # Audio(wavs[0], rate=24_000, autoplay=True)
-    # Save the generated audio 
-    # torchaudio.save("output.wav", torch.from_numpy(wavs[0]), 24000)
-    
-    time_3 = time.time() # TTS havy time dely
     
     print("process time:{}, generate time:{}".format(delay_time, (time_2 - time_1)))
     
@@ -228,7 +289,7 @@ def updating_memory_buffer(
     else:
         qs = DEFAULT_IMAGE_TOKEN + '\n' + captioning
             
-    conv = conv_templates["llama_3"].copy()
+    conv = conv_templates["qwen_1_5_ego"].copy()
     conv.append_message(conv.roles[0], qs)
     conv.append_message(conv.roles[1], None)
     captioning_prompt = conv.get_prompt()
@@ -315,6 +376,19 @@ def updating_memory_buffer(
     # start_inference_event.set()
     # video_reader_event.set()
     return long_memory_tree, short_memory_buffer
+    
+def user_input_thread(input_queue, pause_event):
+    """
+    Thread function to handle user input.
+    """
+    while True:
+        pause_event.wait()
+        question = input("User Instruction: ")
+        input_queue.put(question)
+        if question.lower() == 'exit':
+            break
+        # Pause the user input thread
+        pause_event.clear()
 
 # def video_reader_thread_with_embedding(
 #     cap, 
@@ -376,70 +450,9 @@ def updating_memory_buffer(
 #     print("feature bank:{}".format(len(feature_bank)))
     
 #     return feature_bank
-def load_video(vis_path, n_clips=1, num_frm=100):
-    """
-    Load video frames from a video file.
-
-    Parameters:
-    vis_path (str): Path to the video file.
-    n_clips (int): Number of clips to extract from the video. Defaults to 1.
-    num_frm (int): Number of frames to extract from each clip. Defaults to 100.
-
-    Returns:
-    list: List of PIL.Image.Image objects representing video frames.
-    """
-
-    # decord.bridge.set_bridge('torch')
-    # Load video with VideoReader
-    vr = VideoReader(vis_path, ctx=cpu(0))
-    total_frame_num = len(vr)
-
-    # Currently, this function supports only 1 clip
-    assert n_clips == 1
-
-    # Calculate total number of frames to extract
-    total_num_frm = min(total_frame_num, num_frm)
-    # Get indices of frames to extract
-    frame_idx = get_seq_frames(total_frame_num, total_num_frm)
-    # Extract frames as numpy array
-    img_array = vr.get_batch(frame_idx).asnumpy()   # T H W C
-
-    original_size = (img_array.shape[-2], img_array.shape[-3])  # (width, height)
-    original_sizes = (original_size,) * total_num_frm
-
-    clip_imgs = [Image.fromarray(img_array[j]) for j in range(total_num_frm)]
-    
-
-    return clip_imgs, original_sizes
-
-def get_seq_frames(total_num_frames, desired_num_frames):
-    """
-    Calculate the indices of frames to extract from a video.
-
-    Parameters:
-    total_num_frames (int): Total number of frames in the video.
-    desired_num_frames (int): Desired number of frames to extract.
-
-    Returns:
-    list: List of indices of frames to extract.
-    """
-
-    # Calculate the size of each segment from which a frame will be extracted
-    seg_size = float(total_num_frames - 1) / desired_num_frames
-
-    seq = []
-    for i in range(desired_num_frames):
-        # Calculate the start and end indices of each segment
-        start = int(np.round(seg_size * i))
-        end = int(np.round(seg_size * (i + 1)))
-
-        # Append the middle index of the segment to the list
-        seq.append((start + end) // 2)
-
-    return seq
 
 def video_reader_thread_with_embedding(
-    vr, 
+    cap, 
     total_frames, 
     frame_rate, 
     image_processor, 
@@ -470,7 +483,6 @@ def video_reader_thread_with_embedding(
     
     if num_frame > 900:
         num_frame = 200 # need constrict
-        
     # Decide whether to sample or use every frame
     if total_frames_to_process <= chunk_size:
         # Use every frame between start and end
@@ -487,36 +499,26 @@ def video_reader_thread_with_embedding(
 
     print("Starting from {} and ending with {}".format(start, end))
     pbar = tqdm(total=len(frame_indices), desc="Processing Video", unit="frame")
-    
-    # vr
-    img_array = vr.get_batch(frame_indices).asnumpy()
-    # clip_imgs = [Image.fromarray(img_array[j]) for j in range(len(frame_indices))]
-    for image in img_array:
-        # image = expand2square(image, tuple(int(x * 255) for x in image_processor.image_mean))
-        image = image_processor.preprocess(image, return_tensors="pt")["pixel_values"][0].to(device)
-        # print(image.shape)
-        frame_bank.append(image.unsqueeze(0)) # [ dim resize_w resize_h ]
-        pbar.update(1)
-        
-    # for current_frame_number in frame_indices:
-    #     # Set the position to the current frame number
-    #     cap.set(cv2.CAP_PROP_POS_FRAMES, current_frame_number)
-    #     ret, frame = cap.read()
-    #     if not ret:
-    #         break
 
-    #     current_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    #     current_frame_tensor= process_images_ours([Image.fromarray(current_frame)], image_processor, model.config).to(device)
+    for current_frame_number in frame_indices:
+        # Set the position to the current frame number
+        cap.set(cv2.CAP_PROP_POS_FRAMES, current_frame_number)
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        current_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        current_frame_tensor= process_images_ours([Image.fromarray(current_frame)], image_processor, model.config).to(device)
         
-    #     frame_bank.append(current_frame_tensor)
-    #     # Directly encode the current frame
+        frame_bank.append(current_frame_tensor)
+        # Directly encode the current frame
         
-    #     pbar.update(1)
+        pbar.update(1)
 
     with torch.no_grad():
         # current_frame_tensor = image_processor(current_frame)
         all_frame_tensor = torch.cat(frame_bank, dim=0).to(dtype=torch.float16)
-        print("\n all_frame_tensor:{}".format(all_frame_tensor.shape))
+        print("all_frame_tensor:{}".format(all_frame_tensor.shape))
         # current_frame_tensor= process_images_ours([Image.fromarray(current_frame)], image_processor, model.config).to(device).squeeze(0)
         image_embedding = model.encode_images(all_frame_tensor)
         bs = image_embedding.shape[0]
@@ -651,13 +653,21 @@ def inference_thread_with_memory_and_dialogue_retrival_test(
                                                                             conv_mode, model, embedding_model,
                                                                             tokenizer, embedding_tokenizer, chat, 
                                                                             short_memory_buffer_cache, long_memory_tree_cache, searched_history)
-    print("VILA:", output)
+    print("LongVA:", output)
     existing_data.append({"time":time,"question":question,"label":labels,"predict":output,"class":qa_class, "process_time":process_time})
     process_time_bank.append(process_time)
     generate_time_bank.append(generate_time)
     # time_step.append(length)
     
     # print("LLaVA:", output)
+    
+    # # update memory 
+    # b = [[question, output]]
+    # # a, b = [[y[0], convert_to_markdown(y[1])] for y in history] ,history 
+    # if user_name:
+    #     memory = save_local_memory(memory,b,user_name,args)
+    
+    # _,_,memory,user_name,user_memory_index = enter_name(user_name,memory,local_memory_qa,args)
     
     torch.cuda.empty_cache()
     
@@ -683,17 +693,14 @@ def run_inference(args):
     model_name = get_model_name_from_path(model_path)
     print("{}/{}".format(model_name, model_path))
     
-    print("Initialize GPT-4o in VILA1.5 version:{} in {} mode !".format(args.conv_mode, inference_mode))
-    # tokenizer, model, image_processor, context_len = load_pretrained_model(model_path, None, "llava_qwen", device_map=main_device)
-    tokenizer, model, image_processor, context_len = load_pretrained_model(model_path, model_name, None, device_map=main_device)
-    print("model device:{}".format(model.device))
+    print("Initialize in LongVA-7B-DPO version:{} in {} mode !".format(args.conv_mode, inference_mode))
+    tokenizer, model, image_processor, context_len = load_pretrained_model(model_path, None, "llava_qwen", device_map=main_device)
     
-    print("Initialize GPT-4o in VILA1.5 version:{} in {} GPU1 !".format(args.conv_mode, inference_mode))
-    # _, model_cuda_1, _, _ = load_pretrained_model(model_path, None, "llava_qwen", device_map="cuda:1")
-    _, model_cuda_1, _, _  = load_pretrained_model(model_path, model_name, None, device_map="cuda:1")
+    print("Initialize in LongVA-7B-DPO version:{} in {} GPU1 !".format(args.conv_mode, inference_mode))
+    _, model_cuda_1, _, _ = load_pretrained_model(model_path, None, "llava_qwen", device_map="cuda:1")
     print("model_cuda_1 device:{}".format(model_cuda_1.device))
     # 1. load model
-    embedding_model_id = '/13390024681/All_Model_Zoo/mxbai-colbert-large-v1'
+    embedding_model_id = 'Your mxbai-colbert-large-v1 model path'
     embedding_tokenizer = AutoTokenizer.from_pretrained(embedding_model_id)
     embedding_model = AutoModel.from_pretrained(embedding_model_id).to(main_device)
     
@@ -730,9 +737,15 @@ def run_inference(args):
     memory_tau = args.tau
     memory_compress_rate = args.compress_rate
     
-    start = 87 # 191 219 239 217
+    start = 0 # 191 219 239 217
     inference_count = 0
     infernece_limit = 4
+
+    def find_key_by_category(category, data_dict):
+        for key, categories in data_dict.items():
+            if category in categories:
+                return key
+        return None
     
     sample_rate = args.sample_rate
     print(f"{GREEN}Our sample rate :{RESET}", sample_rate)
@@ -799,7 +812,8 @@ def run_inference(args):
         
             video_name = anno['info']['video_path']
             class_1 = anno['info']['class_1']
-
+            # class_2 = anno['info']['class_2']
+            
             file_dir = os.path.join(video_dir, class_1)
             
             question_list = anno['breakpoint']
@@ -811,14 +825,10 @@ def run_inference(args):
             # if not os.path.exists(video_path):
                 # break        
             # video_path = args.video_dir
-            # cap = cv2.VideoCapture(video_path)
-            # total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            # frame_rate = int(cap.get(cv2.CAP_PROP_FPS))
+            cap = cv2.VideoCapture(video_path)
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            frame_rate = int(cap.get(cv2.CAP_PROP_FPS))
             
-            vr = VideoReader(video_path, ctx=cpu(0))
-            total_frame_num = len(vr)
-            frame_rate = vr.get_avg_fps()
-    
             # current_frame = 0
             frame_line = [0] + time_line
             
@@ -839,9 +849,19 @@ def run_inference(args):
                 # start_inference_triger = False
                 # finish_infernece = True        
                 
+                # feature_bank = video_reader_thread_with_embedding(
+                #     cap, 
+                #     total_frames, 
+                #     frame_rate, 
+                #     image_processor, 
+                #     model, 
+                #     star, 
+                #     end,
+                #     main_device
+                # )
                 feature_bank = video_reader_thread_with_embedding(
-                    vr, 
-                    total_frame_num, 
+                    cap, 
+                    total_frames, 
                     frame_rate, 
                     image_processor, 
                     model, 
