@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 @dataclass
 class DataArguments:
     memory_search_top_k: int = field(default=2)
-    memory_basic_dir: str = field(default='/13390024681/llama/EfficientVideo/Ours/memory_bank/memories')
+    memory_basic_dir: str = field(default='/llama/EfficientVideo/Ours/memory_bank/memories')
     memory_file: str = field(default='update_memory_0512_eng.json')
     language: str = field(default='en')
     max_history: int = field(default=7,metadata={"help": "maximum number for keeping current history"},)

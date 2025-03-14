@@ -47,10 +47,24 @@ Download LLaMA 3, LongVA and Embedding model weight.
 - [LLaMA-3-8B](https://huggingface.co/meta-llama/Meta-Llama-3-8B-Instruct).   
 - [LongVA-7B-DPO](https://huggingface.co/lmms-lab/LongVA-7B-DPO).   
 - [mxbai-colbert-large-v1](https://huggingface.co/mixedbread-ai/mxbai-colbert-large-v1).   
+- [all-MiniLM-L6-v2](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2)
+
+### Environment
+```shell
+git clone https://github.com/hmxiong/StreamChat.git
+cd StreamChat
+pip install torch==2.3.1 torchvision==0.18.1 torchaudio==2.3.1 --index-url https://download.pytorch.org/whl/cu121
+pip install -r requirements.txt
+```
 
 ### Inference, scouring and get results
-Change the 'embedding_model_id' in  inference_streaming_longva_v2.py wih mxbai-colbert-large-v1 model path.
-```python
+```shell
+# change model setting
+Change the 'embedding_model_dict -> minilm-l6' path in memory_bank/memory_retrieval/configs/model_config.py
+Change the 'embedding_model_id' in  inference_streaming_longva_v2.py wih mxbai-colbert-large-v1 model save path.
+Change the LLaMA3, LongVA model save path in inference_streamchat_v0.3.sh
+All settings that need to be changed are marked with 'Your_xxxxx'.
+
 # run script
 bash inference_streamchat_v0.3.sh
 ```
